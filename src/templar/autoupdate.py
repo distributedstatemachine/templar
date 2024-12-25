@@ -204,7 +204,7 @@ class AutoUpdate(threading.Thread):
             if not is_update_needed:
                 logger.info("Local version is up to date. No updates needed.")
                 return
-
+            logger.info("Attempting auto update")
             # Attempt to update code
             update_applied = self.attempt_update()
             if not update_applied:
