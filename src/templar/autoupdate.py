@@ -271,32 +271,18 @@ class AutoUpdate(threading.Thread):
     def restart_app(self):
         """Restarts the current application appropriately based on the runtime environment."""
         logger.info("Restarting application...")
-        # Check for PM2 environment
         if "PM2_HOME" in os.environ:
-            pm2_name = self.get_pm2_process_name()
-            if not pm2_name:
-                logger.warning("Could not determine PM2 process name. Restart aborted.")
-                sys.exit(1)
-            # PM2 will restart the process if we exit
-            logger.info(f"Detected PM2 environment. Restarting process '{pm2_name}'")
+            logger.info("Detected PM2 environment. Exiting process to allow PM2 to restart it.")
+            sys.exit(0)
+        else:
             try:
-                subprocess.check_call(["pm2", "restart", pm2_name])
-                time.sleep(5)  # Give PM2 time to restart the process
+                logger.info("Performing regular restart using subprocess.Popen")
+                subprocess.Popen([sys.executable] + sys.argv)
+                logger.info("New process started. Exiting current process.")
                 sys.exit(0)
-            except subprocess.CalledProcessError as e:
-                logger.exception("PM2 restart failed.", exc_info=e)
+            except Exception as e:
+                logger.exception("Failed to restart application.", exc_info=e)
                 sys.exit(1)
-        # else:
-        #     # Regular restart
-        #     try:
-        #         logger.info("Performing regular restart using subprocess.Popen")
-        #         # Start a new process with the same arguments
-        #         subprocess.Popen([sys.executable] + sys.argv)
-        #         logger.info("New process started. Exiting current process.")
-        #         sys.exit(0)
-        #     except Exception as e:
-        #         logger.exception("Failed to restart application.", exc_info=e)
-        #         sys.exit(1)
 
     def run(self):
         """Thread run method to periodically check for updates."""
