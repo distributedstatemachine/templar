@@ -90,30 +90,37 @@ class AutoUpdate(threading.Thread):
 
     def attempt_update(self):
         """
-        Attempts to pull the latest changes from the remote repository.
+        Attempts to update the local repository to match the remote.
         """
-        if self.repo.is_dirty(untracked_files=True):
-            logger.error("Repository is dirty. Cannot update.")
+        if self.repo.head.is_detached:
+            logger.error("Repository is in a detached HEAD state. Cannot update.")
             return False
+
+        if self.repo.is_dirty(untracked_files=True):
+            logger.error("Repository has uncommitted changes or untracked files. Cannot update.")
+            return False
+
         try:
             origin = self.repo.remote(name="origin")
-            result = origin.pull(TARGET_BRANCH, ff_only=True)
-            if result and result[0].flags & result[0].ERROR > 0:
-                logger.error("Git pull failed with errors.")
+            # Fetch latest changes from remote
+            origin.fetch()
+            # Get the current branch
+            current_branch = self.repo.active_branch
+            if current_branch.name != TARGET_BRANCH:
+                logger.error(
+                    f"Current branch ({current_branch.name}) is not the target branch ({TARGET_BRANCH}). Cannot update."
+                )
                 return False
-            
-            # Verify the update was successful by comparing commit hashes
-            local_commit = self.repo.head.commit.hexsha
-            remote_commit = origin.refs[TARGET_BRANCH].commit.hexsha
-            if local_commit != remote_commit:
-                logger.error("Local repository is not up-to-date after pull.")
-                return False
-                
-            logger.info("Successfully pulled latest changes from remote")
+            # Reset local branch to the remote branch
+            remote_ref = f"origin/{TARGET_BRANCH}"
+            self.repo.git.reset('--hard', remote_ref)
+            logger.info("Successfully reset to the latest commit from remote.")
             return True
         except git.exc.GitCommandError as e:
-            logger.error(f"Git pull failed: {e}")
-            self.repo.git.reset('--hard', 'HEAD')  # Revert any partial updates
+            logger.error(f"Git command failed: {e}")
+            return False
+        except Exception as e:
+            logger.exception("Failed to update repository.", exc_info=e)
             return False
 
     def handle_merge_conflicts(self):
