@@ -68,15 +68,10 @@ class AutoUpdate(threading.Thread):
             logger.error("Failed to get remote version, skipping version check")
             return False
 
-        try:
-            import templar
-            from importlib import reload
-            reload(templar)
-            local_version = templar.__version__
-        except Exception as e:
-            logger.error(f"Failed to reload local version: {e}")
-            # Fallback to imported version
-            local_version = templar.__version__
+        local_version = self.get_local_version()
+        if not local_version:
+            logger.error("Failed to get local version, skipping version check")
+            return False
 
         local_version_obj = version.parse(local_version)
         remote_version_obj = version.parse(remote_version)
@@ -108,20 +103,8 @@ class AutoUpdate(threading.Thread):
             logger.info("Successfully pulled latest changes from remote")
             return True
         except git.exc.GitCommandError as e:
-            # Handle merge conflicts
-            logger.error(
-                "Automatic update failed due to conflicts. Attempting to handle merge conflicts.",
-                exc_info=e,
-            )
-            try:
-                self.handle_merge_conflicts()
-                return True
-            except Exception as e:
-                logger.exception(
-                    "Failed to resolve merge conflicts, automatic update cannot proceed. Please manually pull and update.",
-                    exc_info=e,
-                )
-                return False
+            logger.error("Automatic update failed.", exc_info=e)
+            return False
         except Exception as e:
             logger.exception("Failed to pull latest changes from remote", exc_info=e)
             return False
@@ -132,9 +115,9 @@ class AutoUpdate(threading.Thread):
         """
         try:
             self.repo.git.reset("--merge")
-            origin = self.repo.remotes.origin
-            current_branch = self.repo.active_branch
-            origin.pull(current_branch.name)
+            origin = self.repo.remote(name="origin")
+            current_branch = self.repo.active_branch.name
+            origin.pull(current_branch)
 
             for item in self.repo.index.diff(None):
                 file_path = item.a_path
@@ -146,7 +129,7 @@ class AutoUpdate(threading.Thread):
             return True
         except git.GitCommandError as e:
             logger.exception(
-                "Failed to resolve merge conflicts, automatic update cannot proceed. Please manually pull and update.",
+                "Failed to resolve merge conflicts. Please manually pull and update.",
                 exc_info=e,
             )
             return False
@@ -293,3 +276,21 @@ class AutoUpdate(threading.Thread):
             except Exception as e:
                 logger.exception("Exception during autoupdate check", exc_info=e)
             time.sleep(60)
+
+    def get_local_version(self):
+        """
+        Reads the local __version__ from the __init__.py file.
+        """
+        try:
+            init_py_path = os.path.join(os.path.dirname(__file__), '__init__.py')
+            with open(init_py_path, 'r') as f:
+                content = f.read()
+            for line in content.split('\n'):
+                if line.startswith('__version__'):
+                    local_version = line.split('=')[1].strip().strip(" \"'")
+                    return local_version
+            logger.error("Could not find __version__ in local __init__.py")
+            return None
+        except Exception as e:
+            logger.exception("Failed to read local version", exc_info=e)
+            return None
