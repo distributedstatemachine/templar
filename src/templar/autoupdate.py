@@ -92,21 +92,28 @@ class AutoUpdate(threading.Thread):
         """
         Attempts to pull the latest changes from the remote repository.
         """
-        if self.repo.is_dirty():
-            logger.error(
-                "Current changeset is dirty. Please commit changes, discard changes, or update manually."
-            )
+        if self.repo.is_dirty(untracked_files=True):
+            logger.error("Repository is dirty. Cannot update.")
             return False
         try:
             origin = self.repo.remote(name="origin")
-            origin.pull(TARGET_BRANCH, ff_only=True)
+            result = origin.pull(TARGET_BRANCH, ff_only=True)
+            if result and result[0].flags & result[0].ERROR > 0:
+                logger.error("Git pull failed with errors.")
+                return False
+            
+            # Verify the update was successful by comparing commit hashes
+            local_commit = self.repo.head.commit.hexsha
+            remote_commit = origin.refs[TARGET_BRANCH].commit.hexsha
+            if local_commit != remote_commit:
+                logger.error("Local repository is not up-to-date after pull.")
+                return False
+                
             logger.info("Successfully pulled latest changes from remote")
             return True
         except git.exc.GitCommandError as e:
-            logger.error("Automatic update failed.", exc_info=e)
-            return False
-        except Exception as e:
-            logger.exception("Failed to pull latest changes from remote", exc_info=e)
+            logger.error(f"Git pull failed: {e}")
+            self.repo.git.reset('--hard', 'HEAD')  # Revert any partial updates
             return False
 
     def handle_merge_conflicts(self):
@@ -190,19 +197,17 @@ class AutoUpdate(threading.Thread):
             logger.info("Attempting auto update")
             # Attempt to update code
             update_applied = self.attempt_update()
-            if not update_applied:
-                logger.info("No updates were applied. Skipping dependency sync and restart.")
+            if update_applied:
+                # Proceed with dependency update and restart
+                self.attempt_package_update()
+                self.restart_app()
+            else:
+                logger.info("No updates were applied. Continuing without restart.")
                 return
 
-            # Reload the templar module to get the updated version
-            try:
-                import templar
-                from importlib import reload
-                reload(templar)
-                local_version = templar.__version__
-                logger.info(f"Local version after update: {local_version}")
-            except Exception as e:
-                logger.error(f"Failed to reload templar module: {e}")
+            # Now read the local version
+            local_version = self.get_local_version()
+            logger.info(f"Local version after update: {local_version}")
 
             # Synchronize dependencies
             self.attempt_package_update()
