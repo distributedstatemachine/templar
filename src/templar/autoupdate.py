@@ -265,12 +265,19 @@ class AutoUpdate(threading.Thread):
     def restart_app(self):
         """Restarts the current application appropriately based on the runtime environment."""
         logger.info("Restarting application...")
-        if "PM2_HOME" in os.environ:
-            logger.info("Detected PM2 environment. Exiting process to allow PM2 to restart it.")
-            sys.exit(0)
+        pm2_name = self.get_pm2_process_name()
+        if pm2_name:
+            logger.info(f"Detected PM2 environment. Restarting PM2 process '{pm2_name}'...")
+            try:
+                subprocess.run(["pm2", "restart", pm2_name], check=True)
+                logger.info(f"Successfully restarted PM2 process '{pm2_name}'.")
+                sys.exit(0)
+            except Exception as e:
+                logger.error(f"Failed to restart PM2 process '{pm2_name}': {e}")
+                sys.exit(1)
         else:
             try:
-                logger.info("Performing regular restart using subprocess.Popen")
+                logger.info("PM2 process name not found. Performing regular restart using subprocess.Popen")
                 subprocess.Popen([sys.executable] + sys.argv)
                 logger.info("New process started. Exiting current process.")
                 sys.exit(0)
