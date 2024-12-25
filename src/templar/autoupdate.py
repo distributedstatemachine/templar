@@ -68,11 +68,9 @@ class AutoUpdate(threading.Thread):
             logger.error("Failed to get remote version, skipping version check")
             return False
 
-        # Reload the version from __init__.py to get the latest version after updates
         try:
             import templar
             from importlib import reload
-
             reload(templar)
             local_version = templar.__version__
         except Exception as e:
@@ -92,6 +90,7 @@ class AutoUpdate(threading.Thread):
                 f"than local version ({local_version}), automatically updating..."
             )
             return True
+
         return False
 
     def attempt_update(self):
@@ -196,16 +195,31 @@ class AutoUpdate(threading.Thread):
         # if self.repo.head.is_detached or self.repo.active_branch.name != TARGET_BRANCH:
         #     logger.info("Not on the target branch, skipping auto-update")
         #     return
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            is_updated = loop.run_until_complete(self.check_version_updated())
-            if not is_updated:
+            logger.info("Checking for updates...")
+            # Check if remote version is newer
+            is_update_needed = loop.run_until_complete(self.check_version_updated())
+            if not is_update_needed:
+                logger.info("Local version is up to date. No updates needed.")
                 return
 
-            if not self.attempt_update():
+            # Attempt to update code
+            update_applied = self.attempt_update()
+            if not update_applied:
+                logger.info("No updates were applied. Skipping dependency sync and restart.")
                 return
+
+            # Reload the templar module to get the updated version
+            try:
+                import templar
+                from importlib import reload
+                reload(templar)
+                local_version = templar.__version__
+                logger.info(f"Local version after update: {local_version}")
+            except Exception as e:
+                logger.error(f"Failed to reload templar module: {e}")
 
             # Synchronize dependencies
             self.attempt_package_update()
@@ -214,6 +228,7 @@ class AutoUpdate(threading.Thread):
             loop.run_until_complete(self.cleanup_old_versions())
 
             # Restart application
+            logger.info("Attempting to restart the application...")
             self.restart_app()
         except Exception as e:
             logger.exception("Exception during autoupdate process", exc_info=e)
@@ -233,7 +248,6 @@ class AutoUpdate(threading.Thread):
         except Exception as e:
             logger.error(f"Error running `pm2 jlist`: {e}")
             return None
-
         for proc in pm2_data:
             if proc.get("pid") == current_pid:
                 return proc.get("name")
@@ -254,17 +268,21 @@ class AutoUpdate(threading.Thread):
             try:
                 subprocess.check_call(["pm2", "restart", pm2_name])
                 time.sleep(5)  # Give PM2 time to restart the process
-                sys.exit(1)
+                sys.exit(0)
             except subprocess.CalledProcessError as e:
                 logger.exception("PM2 restart failed.", exc_info=e)
                 sys.exit(1)
-        else:
-            # Regular restart
-            try:
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            except Exception as e:
-                logger.exception("Failed to restart application.", exc_info=e)
-                sys.exit(1)
+        # else:
+        #     # Regular restart
+        #     try:
+        #         logger.info("Performing regular restart using subprocess.Popen")
+        #         # Start a new process with the same arguments
+        #         subprocess.Popen([sys.executable] + sys.argv)
+        #         logger.info("New process started. Exiting current process.")
+        #         sys.exit(0)
+        #     except Exception as e:
+        #         logger.exception("Failed to restart application.", exc_info=e)
+        #         sys.exit(1)
 
     def run(self):
         """Thread run method to periodically check for updates."""
