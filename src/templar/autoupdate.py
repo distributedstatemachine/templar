@@ -135,8 +135,6 @@ class AutoUpdate(threading.Thread):
         except Exception as e:
             logger.exception("Failed to update repository.", exc_info=e)
             return False
-
-            return True
         except git.exc.GitCommandError as e:
             logger.error(f"Git command failed: {e}")
             return False
