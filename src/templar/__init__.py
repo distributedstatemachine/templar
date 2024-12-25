@@ -20,7 +20,7 @@
 # mypy: ignore-errors
 # type: ignore
 
-__version__ = "0.1.45"
+__version__ = "0.1.46"
 version_key = 3000
 
 # Import package.
