@@ -111,10 +111,31 @@ class AutoUpdate(threading.Thread):
                     f"Current branch ({current_branch.name}) is not the target branch ({TARGET_BRANCH}). Cannot update."
                 )
                 return False
+
             # Reset local branch to the remote branch
             remote_ref = f"origin/{TARGET_BRANCH}"
+            logger.info(f"Resetting local branch '{current_branch.name}' to '{remote_ref}'")
             self.repo.git.reset('--hard', remote_ref)
             logger.info("Successfully reset to the latest commit from remote.")
+
+            # Verify that local and remote commits match
+            local_commit = self.repo.commit(current_branch)
+            remote_commit = self.repo.commit(remote_ref)
+            if local_commit.hexsha != remote_commit.hexsha:
+                logger.error("Local commit does not match remote commit after reset. Rolling back.")
+                self.repo.git.reset('--hard', 'HEAD@{1}')  # Reset to previous HEAD
+                return False
+
+            return True
+        except git.exc.GitCommandError as e:
+            logger.error(f"Git command failed: {e}")
+            # Rollback on failure
+            self.repo.git.reset('--hard', 'HEAD@{1}')
+            return False
+        except Exception as e:
+            logger.exception("Failed to update repository.", exc_info=e)
+            return False
+
             return True
         except git.exc.GitCommandError as e:
             logger.error(f"Git command failed: {e}")
