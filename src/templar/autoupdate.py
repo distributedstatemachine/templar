@@ -208,9 +208,6 @@ class AutoUpdate(threading.Thread):
         """
         Automatic update entrypoint method.
         """
-        # if self.repo.head.is_detached or self.repo.active_branch.name != TARGET_BRANCH:
-        #     logger.info("Not on the target branch, skipping auto-update")
-        #     return
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -220,14 +217,11 @@ class AutoUpdate(threading.Thread):
             if not is_update_needed:
                 logger.info("Local version is up to date. No updates needed.")
                 return
+
             logger.info("Attempting auto update")
             # Attempt to update code
             update_applied = self.attempt_update()
-            if update_applied:
-                # Proceed with dependency update and restart
-                self.attempt_package_update()
-                self.restart_app()
-            else:
+            if not update_applied:
                 logger.info("No updates were applied. Continuing without restart.")
                 return
 
