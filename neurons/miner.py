@@ -63,6 +63,7 @@ class Miner:
         parser.add_argument('--debug', action='store_true', help='Enable debug logging')
         parser.add_argument('--trace', action='store_true', help='Enable trace logging')
         parser.add_argument('--peers', type=int, nargs='+', default=[], help='List of UIDs to peer with')
+        parser.add_argument('--local', action='store_true', help='Use local storage for comms')
         bt.subtensor.add_args(parser)
         bt.logging.add_args(parser)
         bt.wallet.add_args(parser)
@@ -180,7 +181,7 @@ class Miner:
                     window=self.current_window,
                     key='checkpoint',
                     timeout=240,
-                    local=False,
+                    local=self.config.local,
                     stale_retention=10
                 )
                 if state_dict is not None:
@@ -327,7 +328,7 @@ class Miner:
                 key='gradient',
                 timeout=5,
                 device=self.config.device,
-                local=False,
+                local=self.config.local,
                 stale_retention=10
             )
             
