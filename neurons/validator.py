@@ -60,6 +60,7 @@ class Validator:
         parser.add_argument('--trace', action='store_true', help='Enable trace logging')
         parser.add_argument('--use_wandb', action='store_true', help='Use Weights and Biases for logging')
         parser.add_argument('--peers', type=int, nargs='+', default=[], help='List of UIDs to peer with')
+        parser.add_argument('--local', action='store_true', help='Use local storage for comms')
         bt.subtensor.add_args(parser)
         bt.logging.add_args(parser)
         bt.wallet.add_args(parser)
@@ -182,7 +183,7 @@ class Validator:
                     window=self.current_window,
                     key='checkpoint',
                     timeout=240,
-                    local=False
+                    local=self.config.local
                 )
                 if state_dict is not None:
                     self.model.load_state_dict(state_dict)
@@ -219,7 +220,7 @@ class Validator:
                         uid=self.uid,
                         window=self.current_window,
                         key='checkpoint',
-                        local=False
+                        local=self.config.local
                     )
                     tplr.logger.info(f"Successfully created checkpoint at window {self.current_window}")
                 except Exception as e:
@@ -246,7 +247,7 @@ class Validator:
                     key='gradient',
                     timeout=5,
                     device=self.config.device,
-                    local=False
+                    local=self.config.local
                 )
 
                 # Check if any gradients were gathered
@@ -327,7 +328,7 @@ class Validator:
                 window=self.sync_window + 1,
                 key='gradient',
                 timeout=5,
-                local=False,
+                local=self.config.local,
                 stale_retention=10
             )
             if eval_grad is None:
