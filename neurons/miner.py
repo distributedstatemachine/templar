@@ -64,6 +64,7 @@ class Miner:
         parser.add_argument('--trace', action='store_true', help='Enable trace logging')
         parser.add_argument('--peers', type=int, nargs='+', default=[], help='List of UIDs to peer with')
         parser.add_argument('--local', action='store_true', help='Use local storage for comms')
+        parser.add_argument('--local_uid', type=int, default=229, help='This Peer uid.')
         bt.subtensor.add_args(parser)
         bt.logging.add_args(parser)
         bt.wallet.add_args(parser)
@@ -82,13 +83,18 @@ class Miner:
         self.hparams = tplr.load_hparams()
         
         # Init bittensor objects
-        self.wallet = bt.wallet(config=self.config)
+        if self.config.local:
+            self.wallet = None
+            self.metagraph = None
+            self.uid = self.config.local_uid
+        else:
+            self.wallet = bt.wallet(config=self.config)
+            self.metagraph = self.subtensor.metagraph(self.config.netuid)
+            if self.wallet.hotkey.ss58_address not in self.metagraph.hotkeys:
+                tplr.logger.error(f'\n\t[bold]The wallet {self.wallet} is not registered on subnet: {self.metagraph.netuid}[/bold]')
+                sys.exit()
+            self.uid = self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
         self.subtensor = bt.subtensor(config=self.config)
-        self.metagraph = self.subtensor.metagraph(self.config.netuid)
-        if self.wallet.hotkey.ss58_address not in self.metagraph.hotkeys:
-            tplr.logger.error(f'\n\t[bold]The wallet {self.wallet} is not registered on subnet: {self.metagraph.netuid}[/bold]')
-            sys.exit()
-        self.uid = self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
         
         # Init model with hparams config
         self.model = LlamaForCausalLM(self.hparams.model_config)
@@ -106,18 +112,18 @@ class Miner:
             self.optimizer,
             start_factor=0.1,
             end_factor=1.0,
-            total_iters=10,
+            total_iters=250,
         )
         cosine_scheduler = CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_0=1000,
+            T_0=10000,
             T_mult=2,
             eta_min=self.hparams.learning_rate * 0.1,
         )
         self.scheduler = SequentialLR(
             self.optimizer,
             schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[10],
+            milestones=[250],
         )
 
         # Init compression
@@ -128,15 +134,27 @@ class Miner:
         self.compressor = tplr.compress.CompressDCT()
 
         # Init comms
-        self.comms = tplr.comms.Comms(
-            wallet=self.wallet,
-            save_location='/tmp',
-            key_prefix='model',
-            config=self.config,
-            netuid=self.config.netuid,
-            metagraph=self.metagraph,
-            hparams=self.hparams,
-        )
+        if self.config.local:
+            self.comms = tplr.comms.Comms(
+                wallet=None,
+                save_location='/tmp',
+                key_prefix='model',
+                config=self.config,
+                netuid=self.config.netuid,
+                metagraph=None,
+                hparams=self.hparams,
+                local = True,
+            )
+        else:
+            self.comms = tplr.comms.Comms(
+                wallet=self.wallet,
+                save_location='/tmp',
+                key_prefix='model',
+                config=self.config,
+                netuid=self.config.netuid,
+                metagraph=self.metagraph,
+                hparams=self.hparams,
+            )
 
         # Init peers
         if not self.config.peers:
@@ -173,26 +191,27 @@ class Miner:
     # Main training loop.
     async def run(self):
         # Try to load latest checkpoint
-        validator_uid, stake = self.comms.get_highest_stake_validator()
-        if stake > 0:
-            try:
-                state_dict = await self.comms.get(
-                    uid=str(validator_uid),
-                    window=self.current_window,
-                    key='checkpoint',
-                    timeout=240,
-                    local=self.config.local,
-                    stale_retention=10
-                )
-                if state_dict is not None:
-                    self.model.load_state_dict(state_dict)
-                    tplr.logger.info(f"Loaded checkpoint from validator {validator_uid} at window {self.current_window}")
-                else:
-                    tplr.logger.info("No checkpoint found, starting from scratch")
-            except Exception as e:
-                tplr.logger.warning(f"Failed to load checkpoint: {e}")
-        else:
-            tplr.logger.info("No active validators found, starting from scratch")
+        if not self.config.local:
+            validator_uid, stake = self.comms.get_highest_stake_validator()
+            if stake > 0:
+                try:
+                    state_dict = await self.comms.get(
+                        uid=str(validator_uid),
+                        window=self.current_window,
+                        key='checkpoint',
+                        timeout=240,
+                        local=self.config.local,
+                        stale_retention=10
+                    )
+                    if state_dict is not None:
+                        self.model.load_state_dict(state_dict)
+                        tplr.logger.info(f"Loaded checkpoint from validator {validator_uid} at window {self.current_window}")
+                    else:
+                        tplr.logger.info("No checkpoint found, starting from scratch")
+                except Exception as e:
+                    tplr.logger.warning(f"Failed to load checkpoint: {e}")
+            else:
+                tplr.logger.info("No active validators found, starting from scratch")
 
         # Start background block listener
         self.loop = asyncio.get_running_loop()
@@ -206,11 +225,16 @@ class Miner:
             step_window = self.current_window
             tplr.logger.info(f"\n{'-' * 40} Window: {step_window} {'-' * 40}")
 
+            if not self.config.local:
+                seed = self.metagraph.hotkeys[self.uid]
+            else:
+                seed = self.uid
+            
             # Get the pages for this window.
             pages = await tplr.dataset.DatasetLoader.next_pages(
                 offset = step_window,
                 n_pages = self.hparams.pages_per_window,
-                seed = self.metagraph.hotkeys[self.uid]
+                seed = seed
             )            
             loader = await tplr.dataset.DatasetLoader.create(
                 batch_size = self.hparams.batch_size,
@@ -394,3 +418,4 @@ class Miner:
 # Start miner/validator.
 if __name__ == "__main__":
     asyncio.run(Miner().run())
+

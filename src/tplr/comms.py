@@ -6,6 +6,7 @@ import aiofiles
 import tempfile
 import numpy as np
 import bittensor as bt
+import botocore
 from typing import List, Dict, Optional, Tuple
 from types import SimpleNamespace
 from aiobotocore.session import get_session
@@ -15,7 +16,6 @@ from .chain import ChainManager
 from .schemas import Bucket
 
 import tplr as tplr
-import botocore
 
 # Constants
 CF_REGION_NAME: str = "enam"
@@ -28,28 +28,30 @@ class Comms(ChainManager):
         wallet: "bt.wallet",
         save_location: str = "/tmp",
         key_prefix: str = "model",
+        local: bool = False,
         **kwargs,
     ):
         self.wallet = wallet
-        # Get the bucket directly
-        self.bucket = self.get_own_bucket()
-        # Now initialize ChainManager with the bucket
-        super().__init__(
-            config=kwargs.get("config"),
-            netuid=kwargs.get("netuid"),
-            metagraph=kwargs.get("metagraph"),
-            hparams=kwargs.get("hparams"),
-            wallet=self.wallet,
-            bucket=self.bucket,
-        )
+        self.local = local
 
-        # Use the hotkey directly in the save_location
-        hotkey = self.wallet.hotkey.ss58_address
-        self.save_location = os.path.join("/tmp", f"hotkey_{hotkey}")
-        os.makedirs(self.save_location, exist_ok=True)
-        self.key_prefix = key_prefix
-        self.session = get_session()
-        self.lock = asyncio.Lock()
+        if not self.local:
+            # Get the bucket and initialize ChainManager only when not in local mode
+            self.bucket = self.get_own_bucket()
+            super().__init__(
+                config=kwargs.get("config"),
+                netuid=kwargs.get("netuid"),
+                metagraph=kwargs.get("metagraph"),
+                hparams=kwargs.get("hparams"),
+                wallet=self.wallet,
+                bucket=self.bucket,
+            )
+
+            hotkey = self.wallet.hotkey.ss58_address
+            self.save_location = os.path.join("/tmp", f"hotkey_{hotkey}")
+            os.makedirs(self.save_location, exist_ok=True)
+            self.key_prefix = key_prefix
+            self.session = get_session()
+            self.lock = asyncio.Lock()
 
     def get_own_bucket(self) -> Bucket:
         """Gets bucket configuration from environment variables via config.BUCKET_SECRETS."""
@@ -701,7 +703,6 @@ class Comms(ChainManager):
         # Check if any stakes are non-zero
         if torch.all(stakes == 0):
             return None, 0.0
-
         highest_stake_uid = torch.argmax(stakes).item()
         stake = stakes[highest_stake_uid].item()
 
@@ -710,3 +711,5 @@ class Comms(ChainManager):
             return None, 0.0
 
         return highest_stake_uid, stake
+
+
