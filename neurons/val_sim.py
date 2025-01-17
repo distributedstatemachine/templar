@@ -100,7 +100,7 @@ class Miner:
         self.model = LlamaForCausalLM(self.hparams.model_config)
         self.model.to(self.config.device)
         self.tokenizer = self.hparams.tokenizer
-        
+
         # Init optimizer and momentum
         self.optimizer = SGD(self.model.parameters(), lr=self.hparams.learning_rate)
         self.momentum = {}
@@ -171,6 +171,8 @@ class Miner:
         self.current_window = int(self.current_block / self.hparams.blocks_per_window)
         self.step_counter = 0
 
+        self.sync_window = self.current_window
+
         # Add step tracking
         self.global_step = 0
         self.window_step = 0
@@ -235,8 +237,13 @@ class Miner:
          # Calculate binary indicators and their moving averages
         loss_improvement_moving_avg = {}
         while True:
-            step_window = self.current_window
-            tplr.logger.info(f"\n{'-' * 40} Window: {step_window} {'-' * 40}")
+            if self.current_window != self.sync_window:
+                tplr.logger.info('<Exhausted window>')
+                break
+
+        while True:
+          #  step_window = self.current_window
+            
 
             if not self.config.local:
                 seed = self.metagraph.hotkeys[self.uid]
@@ -252,14 +259,6 @@ class Miner:
             import copy
             model_copy = copy.deepcopy(self.model)
 
-
-
-
-            #Wait until all miners have finished their gradient
-            while True:
-                if self.current_window != step_window:
-                    tplr.logger.info('<Exhausted window>')
-                    break
             
 
             # Remove self from peers before gathering
@@ -272,7 +271,7 @@ class Miner:
                 state_dict=None,
                 my_uid=self.uid,
                 uids=self.peers,
-                window=step_window,
+                window=self.sync_window,
                 key='gradient',
                 timeout=5,
                 device=self.config.device,
@@ -280,7 +279,16 @@ class Miner:
                 stale_retention=10
             )
 
-
+            eval_result = {}
+            for eval_uid in self.peers:
+                eval_result[eval_uid] = await self.comms.get(
+                    uid=str(eval_uid),
+                    window=self.sync_window,
+                    key='gradient',
+                    timeout=10,
+                    local=self.config.local,
+                    stale_retention=10
+                )
            
 
             # Evaluate selected miner before applying gathered gradients
@@ -288,23 +296,13 @@ class Miner:
             for eval_uid in self.peers:
                 tplr.logger.info(f'Evaluating uid: {eval_uid}')
 
-                # Get individual miner's gradient
-                eval_result = await self.comms.get(
-                    uid=str(eval_uid),
-                    window=step_window,
-                    key='gradient',
-                    timeout=10,
-                    local=self.config.local,
-                    stale_retention=10
-                )
-
-                if eval_result is None:
+                if eval_result[eval_uid] is None:
                     tplr.logger.info(f"No gradient received from UID {eval_uid}. Skipping evaluation.")
                     continue
 
                 # Load evaluation data
                 pages = await tplr.dataset.DatasetLoader.next_pages(
-                    offset=step_window,
+                    offset=self.sync_window,
                     n_pages=self.hparams.pages_per_window,
                     seed=eval_uid
                 )
@@ -315,7 +313,7 @@ class Miner:
                     tokenizer=self.tokenizer
                 )
 
-                state_dict = eval_result
+                state_dict = eval_result[eval_uid]
 
                 # Compute initial loss before applying the gradient
                 model_copy.train()
@@ -401,25 +399,15 @@ class Miner:
             for eval_uid in self.peers:
                 tplr.logger.info(f'Evaluating uid: {eval_uid}')
 
-                # Get individual miner's gradient
-                eval_result = await self.comms.get(
-                    uid=str(eval_uid),
-                    window=step_window,
-                    key='gradient',
-                    timeout=10,
-                    local=self.config.local,
-                    stale_retention=10
-                )
-
-                if eval_result is None:
+                if eval_result[eval_uid] is None:
                     tplr.logger.info(f"No gradient received from UID {eval_uid}. Skipping evaluation.")
                     continue
 
                 # Load evaluation data
                 pages = await tplr.dataset.DatasetLoader.next_pages(
-                    offset=step_window,
+                    offset=self.sync_window,
                     n_pages=self.hparams.pages_per_window,
-                    seed=eval_uid+1e5
+                    seed=random.randint(0, 10000)
                 )
                 loader = await tplr.dataset.DatasetLoader.create(
                     batch_size=self.hparams.batch_size,
@@ -428,7 +416,7 @@ class Miner:
                     tokenizer=self.tokenizer
                 )
 
-                state_dict = eval_result
+                state_dict = eval_result[eval_uid]
 
                 # Compute initial loss before applying the gradient
                 model_copy.train()
@@ -567,8 +555,6 @@ class Miner:
                 **{f"validator/loss_improvement_other_{key}": value for key, value in loss_improvement_other.items()},
                 **{f"validator/loss_improvement_moving_avg_{key}": value for key, value in loss_improvement_moving_avg.items()},
             }, step=self.global_step)
-
-            
             
             # Decompress state and apply to grad.
             for n, p in self.model.named_parameters():
@@ -609,12 +595,7 @@ class Miner:
             self.global_step += 1
             self.window_step += 1
             tplr.logger.info(f"Total optimization steps: {self.global_step}")
-
-            # Wait for next window
-            tplr.logger.info("Wait for next window...")
-            while self.current_window == step_window:
-                await asyncio.sleep(0.1)
-            self.window_step = 0
+            self.sync_window += 1
 
     # Listens for new blocks and sets self.current_block and self.current_window
     def block_listener(self, loop):
