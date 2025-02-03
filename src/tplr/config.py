@@ -47,10 +47,10 @@ required_vars = [
     "R2_WRITE_SECRET_ACCESS_KEY"
 ]
 
-missing_vars = [var for var in required_vars if not os.environ.get(var)]
-if missing_vars:
-    logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
-    sys.exit(1)
+# missing_vars = [var for var in required_vars if not os.environ.get(var)]
+# if missing_vars:
+#     logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+#     sys.exit(1)
 
 # Configure the S3 client
 client_config = botocore.config.Config(

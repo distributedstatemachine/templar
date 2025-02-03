@@ -279,6 +279,11 @@ class Miner:
                 stale_retention=10
             )
 
+            # Check if a valid result was received
+            if not gather_result or not hasattr(gather_result, "state_dict"):
+                tplr.logger.info("No gradient received from peers. Skipping evaluation.")
+                continue
+
             eval_result = {}
             for eval_uid in self.peers:
                 eval_result[eval_uid] = await self.comms.get(
